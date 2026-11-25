@@ -1,0 +1,17 @@
+ECHO "1) Lire un trajet (HASH) : HGETALL ride:1"
+HGETALL ride:1
+ECHO "2) Trajets qui partent a moins de 50 km de Sfax (GEO)"
+GEOSEARCH rides:geo FROMLONLAT 10.76 34.74 BYRADIUS 50 km ASC WITHDIST
+ECHO "3) Trajets Sfax -> Tunis (intersection de deux index SET)"
+SINTER rides:from:sfax rides:to:tunis
+ECHO "4) Top conducteurs (ZSET)"
+ZREVRANGE leaderboard:drivers 0 2 WITHSCORES
+ECHO "5) Reserver une place : on retire 1 place (HINCRBY est atomique)"
+HINCRBY ride:1 seatsLeft -1
+SADD ride:1:passengers 3
+SMEMBERS ride:1:passengers
+ECHO "6) Combien de secondes avant que ride:1 disparaisse ? (TTL)"
+TTL ride:1
+ECHO "7) Statistiques globales"
+HINCRBY stats:summary bookings 1
+HGETALL stats:summary

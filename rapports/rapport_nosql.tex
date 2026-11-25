@@ -1,0 +1,583 @@
+% =====================================================================
+%  Rapport NoSQL - Projet Blasa (covoiturage etudiant) - Redis
+%  A compiler avec pdfLaTeX (Overleaf : menu > Compiler = pdfLaTeX)
+%  Les captures d'ecran vont dans le dossier figures/ (voir \capture)
+% =====================================================================
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[french]{babel}
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc}
+\usepackage{fancyhdr}
+\usepackage{caption}
+\usepackage[colorlinks=true,linkcolor=teal!60!black,urlcolor=teal!60!black]{hyperref}
+
+% ------------------------- A COMPLETER -------------------------------
+\newcommand{\auteurA}{Nessryne Chouchene}          % <- 1er etudiant
+\newcommand{\auteurB}{Omayma Hamdy}          % <- 2e etudiant
+\newcommand{\niveau}{Data Engineering}
+\newcommand{\annee}{2026--2027}
+\newcommand{\encadrante}{Pr.\ Senda Bouaziz}
+% ---------------------------------------------------------------------
+
+\definecolor{brand}{HTML}{0F766E}
+\setlist{itemsep=2pt,topsep=4pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\renewcommand{\arraystretch}{1.25}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\captionsetup{font=small,labelfont=bf}
+
+% noms de cles Redis : \cle{user:{id}} s'ecrit tel quel (pas d'espace parasite apres ':')
+\newcommand{\cle}[1]{\texttt{\detokenize{#1}}}
+
+% capture d'ecran : affiche l'image si elle existe, sinon un cadre a remplacer
+\newcommand{\capture}[3][0.9]{%
+  \begin{figure}[htbp]\centering
+  \IfFileExists{figures/#2.png}{\includegraphics[width=#1\textwidth]{figures/#2.png}}{%
+    \fbox{\parbox{0.8\textwidth}{\centering\vspace{1.6cm}\textit{Capture \`a ins\'erer : figures/#2.png}\vspace{1.6cm}}}}
+  \caption{#3}\end{figure}}
+
+\lstdefinestyle{code}{basicstyle=\ttfamily\footnotesize,backgroundcolor=\color{black!4},
+  frame=single,rulecolor=\color{black!20},breaklines=true,columns=fullflexible,keepspaces=true,
+  showstringspaces=false,xleftmargin=0.4em,xrightmargin=0.4em,aboveskip=0.8em,belowskip=0.8em,
+  keywordstyle=\color{blue!60!black}\bfseries,commentstyle=\color{green!40!black}\itshape,
+  stringstyle=\color{red!50!black}}
+\lstset{style=code}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small Blasa --- Rapport NoSQL}
+\fancyhead[R]{\small \nouppercase{\leftmark}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+
+\begin{document}
+
+% =============================== PAGE DE GARDE ========================
+\begin{titlepage}
+\centering
+{\large Universit\'e de Sfax\\[2pt] Facult\'e des Sciences de Sfax (FSS)\par}
+\vspace{0.6cm}
+{\normalsize \niveau\ --- Ann\'ee universitaire \annee\par}
+\vspace{2.2cm}
+{\large\scshape Rapport de projet\par}
+{\large Module : Bases de donn\'ees NoSQL\par}
+\vspace{1cm}
+\rule{\textwidth}{1.2pt}\\[0.5cm]
+{\Huge\bfseries\color{brand} Blasa\par}
+\vspace{0.3cm}
+{\Large Covoiturage \'etudiant en Tunisie\\ avec une base de donn\'ees Redis\par}
+\rule{\textwidth}{1.2pt}
+\vspace{2.2cm}
+
+\begin{tabular}{rl}
+\textbf{R\'ealis\'e par :} & \auteurA \\ & \auteurB \\[6pt]
+\textbf{Encadrante :} & \encadrante
+\end{tabular}
+
+\vfill
+{\small Ce rapport pr\'esente la partie \emph{donn\'ees} du projet. La partie \emph{API REST} fait l'objet d'un rapport s\'epar\'e pour le module Services Web.}
+\end{titlepage}
+
+% =============================== RESUME ===============================
+\begin{abstract}
+\noindent Blasa est une application de covoiturage destin\'ee aux \'etudiants tunisiens : un conducteur propose des places sur un trajet, un passager cherche un trajet pr\`es de lui ou entre deux villes, r\'eserve une place puis note son conducteur. Ce rapport d\'ecrit la base de donn\'ees de l'application, r\'ealis\'ee avec \textbf{Redis}, une base \textbf{cl\'e-valeur} en m\'emoire. Nous expliquons pourquoi ce choix r\'epond aux besoins (recherche g\'eographique, index par ville, compteurs atomiques, expiration automatique, classement), comment les donn\'ees sont mod\'elis\'ees avec les structures \texttt{HASH}, \texttt{SET}, \texttt{ZSET} et \texttt{GEO}, quelles requ\^etes sont utilis\'ees, et quelles sont les limites de l'approche.
+
+\medskip
+\noindent\textbf{Mots-cl\'es :} NoSQL, Redis, cl\'e-valeur, mod\'elisation, g\'eolocalisation, TTL, atomicit\'e, covoiturage.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% =============================== 1. INTRODUCTION ======================
+\section{Introduction}
+
+\subsection{Contexte et probl\'ematique}
+Chaque semaine, de nombreux \'etudiants font le m\^eme trajet entre leur ville d'\'etudes et leur famille (Sfax, Sousse, Tunis, Gab\`es\ldots). Beaucoup de voitures roulent avec des places vides, alors que d'autres \'etudiants cherchent un moyen de transport abordable. Blasa (\og place \fg{} en dialecte tunisien) met ces deux groupes en relation.
+
+La question pos\'ee par ce rapport est la suivante :
+\begin{quote}
+\emph{Comment stocker et interroger rapidement les trajets, les places restantes, les r\'eservations et les notes, avec une base de donn\'ees adapt\'ee \`a ces usages ?}
+\end{quote}
+
+\subsection{Objectifs}
+\begin{itemize}
+  \item choisir et justifier un mod\`ele NoSQL adapt\'e aux besoins de l'application ;
+  \item concevoir le sch\'ema des donn\'ees \`a partir des requ\^etes \`a servir ;
+  \item utiliser les fonctionnalit\'es propres \`a Redis : structures de donn\'ees, g\'eolocalisation, expiration, op\'erations atomiques ;
+  \item analyser la coh\'erence des donn\'ees et les limites de la solution.
+\end{itemize}
+
+\subsection{P\'erim\`etre}
+L'application couvre toute la Tunisie (22 villes connues, de Bizerte \`a Tataouine). Les donn\'ees de d\'emonstration comportent 4 utilisateurs et 8 trajets. Le projet est un prototype \'etudiant : il n'y a pas d'authentification ni de paiement en ligne.
+
+\subsection{Lien avec le module Services Web}
+Le m\^eme projet valide deux modules. Ce rapport traite la \textbf{couche donn\'ees} (Redis). Une \textbf{API REST} en Java (Jersey), d\'ecrite dans un autre rapport, expose ces donn\'ees \`a une interface web. Le flux complet est le suivant :
+
+\begin{figure}[htbp]\centering
+\begin{tikzpicture}[box/.style={draw,rounded corners,minimum width=2.9cm,minimum height=1.2cm,align=center,fill=#1},>=Stealth,font=\small]
+\node[box=teal!15] (c) {Client\\(page web)};
+\node[box=orange!20,right=2.6cm of c] (a) {API REST\\Jersey / Java};
+\node[box=red!15,right=2.6cm of a] (r) {\textbf{Redis}\\cl\'e-valeur};
+\draw[->] ([yshift=3mm]c.east) -- node[above]{requ\^ete HTTP} ([yshift=3mm]a.west);
+\draw[<-] ([yshift=-3mm]c.east) -- node[below]{r\'eponse JSON} ([yshift=-3mm]a.west);
+\draw[->] ([yshift=3mm]a.east) -- node[above]{commandes} ([yshift=3mm]r.west);
+\draw[<-] ([yshift=-3mm]a.east) -- node[below]{donn\'ees} ([yshift=-3mm]r.west);
+\end{tikzpicture}
+\caption{Architecture g\'en\'erale : ce rapport porte sur la partie Redis.}
+\end{figure}
+
+% =============================== 2. CHOIX NOSQL =======================
+\section{Pourquoi une base NoSQL, et pourquoi Redis ?}
+
+\subsection{Analyse des besoins}
+Avant de choisir la technologie, nous avons list\'e ce que l'application doit faire et ce que cela impose \`a la base.
+
+\begin{table}[htbp]\centering
+\begin{tabularx}{\textwidth}{@{}L{4.6cm}X@{}}
+\toprule
+\textbf{Besoin de l'application} & \textbf{Cons\'equence pour la base}\\
+\midrule
+Afficher un trajet ou un profil en un clic & Acc\`es direct par identifiant, lecture tr\`es rapide \\
+Trouver les trajets \og pr\`es de moi \fg & Recherche g\'eographique par rayon \\
+Filtrer par ville de d\'epart et d'arriv\'ee & Index secondaires, intersection de filtres \\
+Plusieurs personnes r\'eservent en m\^eme temps & Compteur de places d\'ecr\'ement\'e de fa\c con atomique \\
+Un trajet pass\'e doit dispara\^itre & Expiration automatique des donn\'ees \\
+Afficher les meilleurs conducteurs & Classement tri\'e par note moyenne \\
+Peu de relations complexes & Pas besoin de jointures SQL \\
+\bottomrule
+\end{tabularx}
+\caption{Besoins de Blasa et cons\'equences sur le choix de la base.}
+\end{table}
+
+Presque tous ces besoins sont des acc\`es par cl\'e, des compteurs, des ensembles et des classements. Il n'y a pas de jointure complexe ni de requ\^ete analytique.
+
+\subsection{Les familles de bases NoSQL}
+\begin{table}[htbp]\centering
+\begin{tabularx}{\textwidth}{@{}L{2.5cm}L{3.2cm}XL{2.3cm}@{}}
+\toprule
+\textbf{Famille} & \textbf{Exemples} & \textbf{Id\'ee principale} & \textbf{Adapt\'ee \`a Blasa ?}\\
+\midrule
+Cl\'e-valeur & Redis, DynamoDB & Une cl\'e donne acc\`es \`a une valeur ; Redis offre en plus des structures (listes, ensembles, tris) & Oui, choisie \\
+Document & MongoDB, Couchbase & Documents JSON, requ\^etes sur les champs & Possible \\
+Colonnes & Cassandra, HBase & \'Ecriture massive, grandes tables distribu\'ees & Disproportionn\'ee \\
+Graphe & Neo4j & Relations entre entit\'es (r\'eseaux, citations) & Pas utile ici \\
+\bottomrule
+\end{tabularx}
+\caption{Familles NoSQL et ad\'equation avec le projet.}
+\end{table}
+
+\subsection{Redis face aux alternatives}
+Nous aurions pu utiliser MongoDB, qui poss\`ede des index g\'eospatiaux et des index TTL, ou une base SQL avec une extension g\'eographique. Nous avons choisi Redis pour les raisons suivantes.
+
+\begin{table}[htbp]\centering
+\begin{tabularx}{\textwidth}{@{}L{3.3cm}XXX@{}}
+\toprule
+\textbf{Crit\`ere} & \textbf{Redis} & \textbf{MongoDB} & \textbf{SQL}\\
+\midrule
+Lecture par identifiant & Tr\`es rapide (m\'emoire) & Rapide & Rapide\\
+Recherche par rayon & Commande native (\texttt{GEOSEARCH}) & Index \texttt{2dsphere} & Extension n\'ecessaire\\
+Compteur sans surr\'eservation & \texttt{HINCRBY}, atomique & \texttt{\$inc}, atomique & Transaction ou verrou\\
+Expiration automatique & \texttt{EXPIREAT} sur une cl\'e & Index TTL (d\'elai non exact) & T\^ache planifi\'ee\\
+Classement des notes & \texttt{ZSET} natif & Tri + agr\'egation & \texttt{ORDER BY}\\
+Requ\^etes libres & Faibles (index manuels) & Fortes & Fortes\\
+Taille des donn\'ees & Limit\'ee par la RAM & Disque & Disque\\
+\bottomrule
+\end{tabularx}
+\caption{Comparaison qualitative pour les besoins de Blasa.}
+\end{table}
+
+\textbf{Justification.} Chaque besoin de Blasa correspond \`a une structure Redis d\'ej\`a existante (\texttt{GEO}, \texttt{SET}, \texttt{ZSET}, compteurs, expiration). Nous \'ecrivons donc tr\`es peu de logique m\'etier c\^ot\'e application. En contrepartie, Redis est faible pour les requ\^etes libres : nous devons pr\'evoir \`a l'avance les acc\`es dont nous avons besoin. Ce compromis est acceptable, car les usages de l'application sont peu nombreux et connus.
+
+% =============================== 3. REDIS =============================
+\section{Redis en bref}
+Redis (\emph{REmote DIctionary Server}) est une base de donn\'ees \textbf{en m\'emoire} de type \textbf{cl\'e-valeur}. Les points qui nous int\'eressent :
+
+\begin{itemize}
+  \item \textbf{Structures de donn\'ees} : cha\^ine, \texttt{HASH} (champs/valeurs, comme un petit objet), \texttt{SET} (ensemble sans doublon), \texttt{ZSET} (ensemble tri\'e par score), \texttt{GEO} (positions, stock\'ees dans un \texttt{ZSET}).
+  \item \textbf{Atomicit\'e} : chaque commande est ex\'ecut\'ee en entier, sans \^etre interrompue par une autre. Deux \texttt{HINCRBY} simultan\'es sur la m\^eme cl\'e ne se m\'elangent jamais.
+  \item \textbf{Expiration} : une cl\'e peut recevoir une dur\'ee de vie (\texttt{EXPIRE}) ou une date limite (\texttt{EXPIREAT}) ; elle est ensuite supprim\'ee automatiquement.
+  \item \textbf{Persistance optionnelle} : instantan\'es (RDB) ou journal (AOF), en plus de la m\'emoire.
+\end{itemize}
+
+Dans notre projet, Redis tourne dans un conteneur Docker (image \texttt{redis:7-alpine}). Aucun volume n'est configur\'e : les donn\'ees ne survivent donc pas \`a la suppression du conteneur. C'est suffisant pour une d\'emonstration, mais pas pour de la production (voir la section~\ref{sec:limites}).
+
+% =============================== 4. MODELISATION ======================
+\section{Mod\'elisation des donn\'ees}
+
+\subsection{D\'emarche : partir des requ\^etes}
+En SQL, on mod\'elise d'abord les entit\'es puis on \'ecrit les requ\^etes. Avec Redis, c'est l'inverse : \textbf{on liste les acc\`es n\'ecessaires, puis on choisit pour chacun la structure qui le sert le mieux}.
+
+\begin{table}[htbp]\centering
+\begin{tabularx}{\textwidth}{@{}L{0.9cm}XL{4.6cm}@{}}
+\toprule
+\textbf{N\textdegree} & \textbf{Acc\`es n\'ecessaire} & \textbf{Structure choisie}\\
+\midrule
+Q1 & Lire un trajet ou un profil & \texttt{HASH} \\
+Q2 & Trajets \`a moins de $r$ km d'un point & \texttt{GEO} \\
+Q3 & Trajets au d\'epart de A et \`a destination de B & \texttt{SET} par ville, \texttt{SINTER} \\
+Q4 & R\'eserver une place sans d\'epasser le stock & Compteur \texttt{HINCRBY} \\
+Q5 & Savoir qui a r\'eserv\'e, \'eviter les doublons & \texttt{SET} de passagers \\
+Q6 & Meilleurs conducteurs & \texttt{ZSET} \\
+Q7 & Faire dispara\^itre un trajet pass\'e & \texttt{EXPIREAT} \\
+Q8 & Obtenir un nouvel identifiant unique & Compteur \texttt{INCR} \\
+Q9 & Compter trajets, r\'eservations, notes & \texttt{HASH} de compteurs \\
+\bottomrule
+\end{tabularx}
+\caption{Les acc\`es \`a servir et la structure Redis retenue pour chacun.}
+\end{table}
+
+\subsection{Les cl\'es de la base}
+Nous nommons les cl\'es selon la convention \cle{entite:identifiant[:sous-ensemble]}.
+
+\begin{table}[htbp]\centering
+\begin{tabularx}{\textwidth}{@{}L{4.7cm}L{1.5cm}XL{1.9cm}@{}}
+\toprule
+\textbf{Cl\'e} & \textbf{Type} & \textbf{Contenu} & \textbf{TTL}\\
+\midrule
+\cle{seq:user}, \cle{seq:ride} & cha\^ine & Dernier identifiant attribu\'e & non\\
+\cle{user:{id}} & HASH & \texttt{name}, \texttt{email}, \texttt{city}, \texttt{ratingSum}, \texttt{ratingCount} & non\\
+\cle{ride:{id}} & HASH & \texttt{driverId}, \texttt{origin}, \texttt{destination}, \texttt{departureAt}, \texttt{seats}, \texttt{seatsLeft}, \texttt{price}, \texttt{status} & oui, au d\'epart\\
+\cle{ride:{id}:passengers} & SET & Identifiants des passagers & oui, au d\'epart\\
+\cle{rides:geo} & GEO & Position de d\'epart de chaque trajet & non\\
+\cle{rides:from:{ville}} & SET & Trajets au d\'epart de la ville & non\\
+\cle{rides:to:{ville}} & SET & Trajets \`a destination de la ville & non\\
+\cle{leaderboard:drivers} & ZSET & Utilisateur, avec la note moyenne comme score & non\\
+\cle{stats:summary} & HASH & \texttt{ridesCreated}, \texttt{bookings}, \texttt{ratings} & non\\
+\bottomrule
+\end{tabularx}
+\caption{Espace de cl\'es de Blasa.}
+\end{table}
+
+\begin{figure}[htbp]\centering
+\begin{tikzpicture}[k/.style={draw,rounded corners,align=center,minimum height=9mm,font=\small,fill=#1},
+  lab/.style={font=\scriptsize\sffamily,fill=white,inner sep=1pt},>=Stealth]
+\node[k=blue!12]   (geo)  at (-5.2, 2.0) {\cle{rides:geo}\\GEO};
+\node[k=green!15]  (from) at (-5.2, 0.0) {\cle{rides:from:sfax}\\SET};
+\node[k=green!15]  (to)   at (-5.2,-2.0) {\cle{rides:to:tunis}\\SET};
+\node[k=orange!25] (ride) at ( 0.0, 0.0) {\cle{ride:1}\\HASH};
+\node[k=purple!12] (pas)  at ( 5.2, 2.0) {\cle{ride:1:passengers}\\SET};
+\node[k=yellow!30] (user) at ( 5.2, 0.0) {\cle{user:1}\\HASH};
+\node[k=red!12]    (lead) at ( 5.2,-2.0) {\cle{leaderboard:drivers}\\ZSET};
+\draw[->] (geo)  -- node[lab]{membre \cle{ride:1}} (ride);
+\draw[->] (from) -- node[lab]{membre \cle{ride:1}} (ride);
+\draw[->] (to)   -- node[lab]{membre \cle{ride:1}} (ride);
+\draw[->] (pas)  -- node[lab]{passagers} (ride);
+\draw[->] (ride) -- node[lab]{driverId} (user);
+\draw[->] (user) -- node[lab]{score = moyenne} (lead);
+\end{tikzpicture}
+\caption{Liens entre les cl\'es : les index pointent vers la fiche du trajet, qui pointe vers son conducteur.}
+\end{figure}
+
+\subsection{Choix de conception}
+
+\paragraph{Les fiches : \texttt{HASH}.}
+Un utilisateur ou un trajet est un petit objet \`a champs. Le \texttt{HASH} permet de lire tout l'objet (\texttt{HGETALL}), de modifier un seul champ (\texttt{HSET}) ou d'incr\'ementer un champ num\'erique (\texttt{HINCRBY}) sans r\'e\'ecrire le reste. Toutes les valeurs sont stock\'ees comme du texte ; le type est g\'er\'e par l'application.
+
+\paragraph{Identifiants : compteurs \texttt{INCR}.}
+\texttt{INCR seq:ride} renvoie un nouvel identifiant unique, m\^eme si deux cr\'eations ont lieu en m\^eme temps, car la commande est atomique.
+
+\paragraph{Index par ville : \texttt{SET}.}
+Redis n'a pas d'index secondaires automatiques. Nous les construisons nous-m\^emes : \`a chaque cr\'eation de trajet, nous ajoutons \cle{ride:{id}} dans \cle{rides:from:{ville}} et \cle{rides:to:{ville}}. Une recherche Sfax $\rightarrow$ Tunis est alors une \textbf{intersection} de deux ensembles (\texttt{SINTER}). Le co\^ut est une \'ecriture suppl\'ementaire \`a la cr\'eation et \`a la suppression. Les noms de villes sont normalis\'es (minuscules, sans accent, sans espace : \og Gab\`es \fg{} devient \texttt{gabes}) pour que les index restent coh\'erents.
+
+\paragraph{Proximit\'e : \texttt{GEO}.}
+\texttt{GEOADD} enregistre la position de d\'epart du trajet (la longitude vient en premier). \texttt{GEOSEARCH} renvoie les membres dans un rayon, tri\'es par distance. En interne, un \texttt{GEO} est un \texttt{ZSET} dont le score est un code g\'eographique : \texttt{ZRANGE rides:geo 0 -1} liste donc tous les trajets.
+
+\paragraph{Notes : d\'enormalisation.}
+Nous ne gardons pas la liste des notes mais seulement \texttt{ratingSum} et \texttt{ratingCount}. La moyenne est \texttt{ratingSum / ratingCount}, mise \`a jour en temps constant. En contrepartie, nous perdons l'historique des notes et l'identit\'e de ceux qui les ont donn\'ees. Le score du \texttt{ZSET} \cle{leaderboard:drivers} est cette moyenne.
+
+\paragraph{Dates.}
+Les dates sont enregistr\'ees en secondes depuis 1970 (\texttt{departureAt}). C'est le format attendu par \texttt{EXPIREAT}.
+
+\subsection{Donn\'ees d'exemple}
+\begin{table}[htbp]\centering
+\begin{tabular}{@{}rllrrl@{}}
+\toprule
+\multicolumn{6}{@{}l}{\textbf{Utilisateurs}}\\
+\textbf{id} & \textbf{nom} & \textbf{ville} & \textbf{somme} & \textbf{nb notes} & \textbf{moyenne}\\
+\midrule
+1 & Sarra & sfax & 14 & 3 & 4,67\\
+2 & Ahmed & sfax & 9 & 2 & 4,50\\
+3 & Meriem & sousse & 4 & 1 & 4,00\\
+4 & Yassine & tunis & 0 & 0 & ---\\
+\bottomrule
+\end{tabular}
+
+\vspace{0.6em}
+\begin{tabular}{@{}rllllrr@{}}
+\toprule
+\multicolumn{7}{@{}l}{\textbf{Trajets}}\\
+\textbf{id} & \textbf{conducteur} & \textbf{d\'epart} & \textbf{arriv\'ee} & \textbf{statut} & \textbf{places} & \textbf{prix (DT)}\\
+\midrule
+1 & 1 & sfax & tunis & OPEN & 2/3 & 15\\
+2 & 2 & sfax & sousse & OPEN & 4/4 & 8\\
+3 & 3 & sousse & tunis & OPEN & 3/3 & 10\\
+4 & 2 & tunis & sfax & OPEN & 2/2 & 15\\
+5 & 3 & sfax & tunis & OPEN & 3/3 & 12\\
+6 & 1 & gabes & sfax & OPEN & 3/3 & 9\\
+7 & 4 & tunis & bizerte & OPEN & 2/2 & 5\\
+8 & 2 & monastir & tunis & OPEN & 3/4 & 9\\
+\bottomrule
+\end{tabular}
+\caption{Jeu de donn\'ees de d\'emonstration (le trajet 1 a d\'ej\`a le passager 4, le trajet 8 le passager 3). Les dates de d\'epart sont g\'en\'er\'ees \`a chaque chargement, entre 20 et 50 heures dans le futur.}
+\end{table}
+
+% =============================== 5. REQUETES ==========================
+\section{Op\'erations et requ\^etes}
+
+\subsection{Correspondance entre actions et commandes}
+\begin{table}[htbp]\centering
+\begin{tabularx}{\textwidth}{@{}L{3.7cm}X@{}}
+\toprule
+\textbf{Action} & \textbf{Commandes Redis}\\
+\midrule
+Cr\'eer un compte & \texttt{INCR seq:user}, \texttt{HSET user:\{id\} \ldots}\\
+Lire / modifier un profil & \texttt{HGETALL user:\{id\}}, \texttt{HSET user:\{id\} champ valeur}\\
+Supprimer un compte & \texttt{ZREM leaderboard:drivers}, \texttt{DEL user:\{id\}}\\
+Proposer un trajet & \texttt{INCR seq:ride}, \texttt{HSET ride:\{id\} \ldots}, \texttt{EXPIREAT}, \texttt{GEOADD rides:geo}, \texttt{SADD rides:from:\ldots}, \texttt{SADD rides:to:\ldots}, \texttt{HINCRBY stats:summary}\\
+Chercher par villes & \texttt{SINTER rides:from:A rides:to:B} (ou \texttt{SMEMBERS} si un seul filtre)\\
+Chercher autour d'un point & \texttt{GEOSEARCH rides:geo FROMLONLAT \ldots\ BYRADIUS \ldots\ KM ASC WITHDIST}\\
+Lister tous les trajets & \texttt{ZRANGE rides:geo 0 -1}\\
+R\'eserver une place & \texttt{HINCRBY ride:\{id\} seatsLeft -1}, \texttt{SADD ride:\{id\}:passengers}\\
+Annuler une r\'eservation & \texttt{SREM ride:\{id\}:passengers}, \texttt{HINCRBY ride:\{id\} seatsLeft 1}\\
+Noter un conducteur & \texttt{HINCRBY user:\{id\} ratingSum}, \texttt{HINCRBY user:\{id\} ratingCount}, \texttt{ZADD leaderboard:drivers}\\
+Annuler un trajet & \texttt{SREM} (2 index), \texttt{ZREM rides:geo}, \texttt{DEL ride:\{id\} ride:\{id\}:passengers}\\
+Classement & \texttt{ZREVRANGE leaderboard:drivers 0 n WITHSCORES}\\
+\bottomrule
+\end{tabularx}
+\caption{Actions de l'application et commandes Redis utilis\'ees.}
+\end{table}
+
+\subsection{Requ\^etes de d\'emonstration}
+Voici les requ\^etes ex\'ecut\'ees dans \texttt{redis-cli} sur les donn\'ees d'exemple, avec les r\'esultats obtenus.
+
+\paragraph{1. Lire un trajet.}
+\begin{lstlisting}
+HGETALL ride:1
+\end{lstlisting}
+Renvoie les 8 champs du trajet 1 (conducteur 1, Sfax $\rightarrow$ Tunis, 2 places restantes sur 3, 15\,DT, statut \texttt{OPEN}).
+
+\paragraph{2. Trajets \`a moins de 50 km de Sfax.}
+\begin{lstlisting}
+GEOSEARCH rides:geo FROMLONLAT 10.76 34.74 BYRADIUS 50 km ASC WITHDIST
+\end{lstlisting}
+R\'esultat, tri\'e par distance : \cle{ride:1} (0,0668\,km), \cle{ride:5}, puis \cle{ride:2} (0,7199\,km). Les trajets de Sousse et de Tunis sont trop loin et n'apparaissent pas.
+
+\paragraph{3. Trajets Sfax $\rightarrow$ Tunis (intersection de deux filtres).}
+\begin{lstlisting}
+SINTER rides:from:sfax rides:to:tunis
+\end{lstlisting}
+R\'esultat : \cle{ride:1} et \cle{ride:5}. Ce sont les seuls membres pr\'esents dans les deux ensembles.
+
+\paragraph{4. Classement des conducteurs.}
+\begin{lstlisting}
+ZREVRANGE leaderboard:drivers 0 2 WITHSCORES
+\end{lstlisting}
+R\'esultat : le conducteur 1 (4,67), le 2 (4,5) puis le 3 (4).
+
+\paragraph{5. R\'eserver une place.}
+\begin{lstlisting}
+HINCRBY ride:1 seatsLeft -1
+SADD ride:1:passengers 3
+SMEMBERS ride:1:passengers
+\end{lstlisting}
+Les places restantes passent de 2 \`a 1 et la liste des passagers contient maintenant les passagers 3 et 4.
+
+\paragraph{6. Dur\'ee de vie du trajet.}
+\begin{lstlisting}
+TTL ride:1
+\end{lstlisting}
+Renvoie le nombre de secondes avant la disparition du trajet. Juste apr\`es le chargement des donn\'ees d'exemple, le r\'esultat est de l'ordre de 70\,000\,s : le trajet 1 part dans environ 20 heures, et Redis le supprimera \`a l'instant exact du d\'epart (\texttt{EXPIREAT}).
+
+\paragraph{7. Compteurs globaux.}
+\begin{lstlisting}
+HINCRBY stats:summary bookings 1
+HGETALL stats:summary
+\end{lstlisting}
+
+\capture{redis-cli-geosearch}{Recherche autour de Sfax dans \texttt{redis-cli} (\texttt{GEOSEARCH}).}
+
+\subsection{Complexit\'e des op\'erations}
+\begin{table}[htbp]\centering
+\begin{tabularx}{\textwidth}{@{}L{4.4cm}L{4.4cm}X@{}}
+\toprule
+\textbf{Commande} & \textbf{Complexit\'e} & \textbf{Remarque}\\
+\midrule
+\texttt{HINCRBY}, \texttt{SADD}, \texttt{SISMEMBER}, \texttt{INCR}, \texttt{EXPIREAT} & $O(1)$ & Co\^ut constant, quelle que soit la taille des donn\'ees\\
+\texttt{HGETALL} & $O(N)$, $N$ = nombre de champs & Ici $N \leq 8$ : n\'egligeable\\
+\texttt{SINTER} & $O(N\cdot M)$, $N$ = plus petit ensemble & Rapide car on part du plus petit ensemble\\
+\texttt{GEOSEARCH} & $O(N + \log M)$, $N$ = r\'esultats dans la zone & Proportionnel au nombre de trajets trouv\'es\\
+\texttt{ZREVRANGE} & $O(\log N + M)$, $M$ = \'el\'ements renvoy\'es & Id\'eal pour un \og top 5 \fg\\
+\bottomrule
+\end{tabularx}
+\caption{Complexit\'e annonc\'ee par la documentation Redis des commandes principales.}
+\end{table}
+
+% =============================== 6. COHERENCE =========================
+\section{Coh\'erence, atomicit\'e et expiration}
+
+\subsection{R\'eservation sans surr\'eservation}
+Le risque principal est que deux passagers r\'eservent en m\^eme temps la derni\`ere place. Nous utilisons le fait que \texttt{HINCRBY} est atomique :
+
+\begin{enumerate}
+  \item v\'erifier que le trajet est ouvert (\texttt{HGET status}) ;
+  \item v\'erifier que le passager n'a pas d\'ej\`a r\'eserv\'e (\texttt{SISMEMBER}) ;
+  \item d\'ecr\'ementer \texttt{seatsLeft} avec \texttt{HINCRBY -1} ;
+  \item si le r\'esultat est n\'egatif, il n'y avait plus de place : on r\'eincr\'emente (\texttt{HINCRBY +1}) et on refuse ;
+  \item sinon, ajouter le passager (\texttt{SADD}) et incr\'ementer le compteur global.
+\end{enumerate}
+
+Comme chaque \texttt{HINCRBY} est atomique, le stock ne descend jamais sous z\'ero de fa\c con durable : le second passager qui arrive sur la derni\`ere place re\c coit $-1$ et est refus\'e.
+
+\subsection{Limite : plusieurs commandes ne sont pas une transaction}
+Les \'etapes 3 et 5 sont deux commandes distinctes. Si l'application s'arr\^etait entre les deux, une place serait consomm\'ee sans passager enregistr\'e. Pour un prototype, nous avons accept\'e ce risque. En production, on regrouperait les \'etapes dans une transaction \texttt{MULTI/EXEC} ou, mieux, dans un script Lua ex\'ecut\'e atomiquement par Redis.
+
+\subsection{Expiration et nettoyage des index}
+Le trajet re\c coit \texttt{EXPIREAT} \`a l'heure de d\'epart : sa fiche \cle{ride:{id}} dispara\^it toute seule. Mais l'expiration s'applique \textbf{\`a une cl\'e enti\`ere}, pas \`a un membre d'un ensemble. Le membre \cle{ride:1} reste donc dans \cle{rides:geo} et dans les \texttt{SET} d'index.
+
+Notre solution est un \textbf{nettoyage paresseux} : lorsqu'une recherche trouve un membre dont la fiche n'existe plus, l'application le supprime des index (\texttt{ZREM}, \texttt{SREM}) et ne l'affiche pas. Les r\'esultats sont toujours justes, et les index se nettoient au fil des consultations. Une autre solution serait une t\^ache p\'eriodique ou les notifications d'\'ev\'enements de cl\'es de Redis.
+
+% =============================== 7. TEMPS REEL ========================
+\section{Fonctions temps r\'eel : Pub/Sub, TTL et carte}
+Trois fonctions de l'interface s'appuient directement sur des fonctionnalit\'es de Redis qui vont au-del\`a du simple stockage.
+
+\subsection{Mise \`a jour en direct avec Pub/Sub}
+\textbf{Probl\`eme.} Quand un passager r\'eserve la derni\`ere place, les autres \'ecrans doivent le savoir imm\'ediatement, sans recharger la page.
+
+\textbf{Solution.} Redis fournit un m\'ecanisme de \textbf{publication/abonnement} (\emph{Pub/Sub}). Un programme \emph{publie} un message sur un \emph{canal} (\texttt{PUBLISH}), et tous les programmes \emph{abonn\'es} \`a ce canal (\texttt{SUBSCRIBE}) le re\c coivent aussit\^ot. Nous utilisons un seul canal, \cle{blasa:events}.
+
+\begin{lstlisting}
+PUBLISH blasa:events {"type":"booked","rideId":2,"userId":3,"seatsLeft":3}
+\end{lstlisting}
+
+Chaque action de l'application publie un \'ev\'enement : \texttt{ride\_created}, \texttt{ride\_updated}, \texttt{ride\_deleted}, \texttt{booked}, \texttt{booking\_cancelled} et \texttt{rated}. Le serveur est lui-m\^eme abonn\'e au canal et retransmet chaque message aux navigateurs ouverts (voir le rapport Services Web, section sur les Server-Sent Events).
+
+\begin{figure}[htbp]\centering
+\begin{tikzpicture}[box/.style={draw,rounded corners,minimum width=2.6cm,minimum height=1.1cm,align=center,fill=#1},>=Stealth,font=\small]
+\node[box=teal!15] (b) {Navigateur A\\r\'eserve};
+\node[box=orange!20,right=2.1cm of b] (a) {API\\\texttt{PUBLISH}};
+\node[box=red!15,right=2.1cm of a] (r) {Redis\\\cle{blasa:events}};
+\node[box=orange!20,right=2.1cm of r] (s) {API\\\texttt{SUBSCRIBE}};
+\node[box=teal!15,right=2.1cm of s] (c) {Navigateur B\\mis \`a jour};
+\draw[->] (b) -- (a); \draw[->] (a) -- (r); \draw[->] (r) -- (s); \draw[->] (s) -- (c);
+\end{tikzpicture}
+\caption{Parcours d'un \'ev\'enement : de la r\'eservation \`a la mise \`a jour des autres \'ecrans.}
+\end{figure}
+
+\textbf{Limites.} Le Pub/Sub est \emph{sans m\'emoire} : un message n'est remis qu'aux abonn\'es connect\'es \`a cet instant et n'est conserv\'e nulle part. C'est acceptable ici, car les donn\'ees restent dans les \texttt{HASH} et la page se rafra\^ichit en relisant l'\'etat. Pour des messages qui ne doivent jamais \^etre perdus, on utiliserait les \emph{Redis Streams}. L'abonn\'e occupe en outre une connexion d\'edi\'ee, qui ne peut plus ex\'ecuter d'autres commandes.
+
+\subsection{Compte \`a rebours : le TTL rendu visible}
+Chaque trajet affiche le temps restant avant son d\'epart. Ce compte \`a rebours est calcul\'e \`a partir de \texttt{departureAt}, la m\^eme date que celle donn\'ee \`a \texttt{EXPIREAT}. Lorsqu'il atteint z\'ero, Redis supprime la fiche tout seul, sans t\^ache planifi\'ee c\^ot\'e application.
+
+Nous l'avons v\'erifi\'e : un trajet cr\'e\'e avec un d\'epart dans 25 secondes affichait un \texttt{TTL} de 24, puis \texttt{EXISTS ride:9} renvoyait \texttt{0} apr\`es l'\'ech\'eance et la carte de ce trajet disparaissait de l'\'ecran. Une entr\'ee a pourtant surv\'ecu : \texttt{SISMEMBER rides:to:gabes ride:9} renvoyait encore \texttt{1}. C'est la limite d\'ecrite en section~6.3 : l'expiration ne touche pas les membres des index, qui sont nettoy\'es \`a la lecture suivante.
+
+\begin{lstlisting}
+TTL ride:9              ->  24
+(attente de 30 secondes)
+EXISTS ride:9           ->  0     la fiche a disparu
+SISMEMBER rides:to:gabes ride:9   ->  1     l'index n'est pas encore nettoye
+\end{lstlisting}
+
+\capture{ui-ttl}{Compte \`a rebours d'un trajet, et TTL dans le contenu de Redis (mode technique).}
+
+\subsection{Carte interactive et \texttt{GEOSEARCH}}
+La page \og Carte \fg{} affiche les trajets sur une carte de la Tunisie. En cliquant sur un point et en r\'eglant un rayon, l'utilisateur lance exactement la requ\^ete de la section~5 :
+\begin{lstlisting}
+GEOSEARCH rides:geo FROMLONLAT 10.7600 34.7406 BYRADIUS 50 km ASC WITHDIST
+\end{lstlisting}
+Les trajets trouv\'es sont mis en \'evidence et list\'es par distance. L'interface affiche la commande utilis\'ee, ce qui relie ce qu'on voit \`a ce que Redis ex\'ecute.
+
+\capture{ui-carte}{Carte interactive : recherche des trajets dans un rayon autour de Sfax.}
+
+% =============================== 8. DEPLOIEMENT =======================
+\section{Mise en \oe uvre}
+
+\subsection{Lancement de Redis}
+Redis est d\'emarr\'e avec Docker, ce qui \'evite toute installation :
+\begin{lstlisting}
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: blasa-redis
+    ports:
+      - "6379:6379"
+\end{lstlisting}
+
+\subsection{Chargement des donn\'ees et exploration}
+Le fichier \texttt{redis/01\_seed.redis} contient toutes les commandes de cr\'eation des donn\'ees d'exemple. Il est g\'en\'er\'e par le script de lancement \`a partir du mod\`ele \texttt{01\_seed.template.redis}, afin que les heures de d\'epart soient toujours dans le futur. Il se charge ainsi, puis on ouvre \texttt{redis-cli} pour interroger la base :
+\begin{lstlisting}
+docker compose up -d
+cmd /c "docker exec -i blasa-redis redis-cli < redis\01_seed.redis"
+docker exec -it blasa-redis redis-cli
+\end{lstlisting}
+Le fichier \texttt{redis/02\_queries.redis} rejoue les sept requ\^etes de la section~5. Il modifie des donn\'ees (places restantes, compteurs) ; on recharge donc le jeu d'exemple pour repartir de z\'ero.
+
+\subsection{Acc\`es depuis l'application}
+L'API Java utilise la biblioth\`eque \textbf{Jedis}. Une classe de connexion g\`ere un \emph{pool} de connexions partag\'ees, et une couche \og repository \fg{} regroupe toutes les commandes Redis : le reste de l'application ne manipule jamais Redis directement.
+
+Pour la d\'emonstration, l'interface web poss\`ede un mode technique qui affiche le contenu r\'eel de Redis (cl\'e, type, TTL, valeur) apr\`es chaque action, en parcourant les cl\'es avec \texttt{SCAN}.
+
+\capture{ui-mode-technique}{Mode technique de l'interface : contenu de Redis apr\`es une r\'eservation.}
+
+% =============================== 8. LIMITES ===========================
+\section{Limites et perspectives}\label{sec:limites}
+
+\begin{itemize}
+  \item \textbf{M\'emoire et durabilit\'e.} Les donn\'ees sont en RAM et, sans volume Docker, perdues avec le conteneur. En production : volume persistant, journal AOF, sauvegardes.
+  \item \textbf{Requ\^etes limit\'ees.} Tout nouvel acc\`es (par exemple \og trajets pas chers de Sfax \`a Sousse \fg{}) demande un nouvel index que nous devons maintenir. Un module comme RediSearch ou une base document comme MongoDB serait plus souple.
+  \item \textbf{Atomicit\'e partielle.} Voir la section~6.2 : \texttt{MULTI/EXEC} ou script Lua \`a pr\'evoir.
+  \item \textbf{Historique des notes.} La d\'enormalisation (somme et nombre) emp\^eche de savoir qui a not\'e qui, et de limiter une note par trajet.
+  \item \textbf{Haute disponibilit\'e.} Une seule instance Redis : pas de r\'eplication ni de \emph{cluster}.
+  \item \textbf{S\'ecurit\'e.} Redis est accessible sans mot de passe en local ; \`a prot\'eger (\texttt{AUTH}, r\'eseau priv\'e, TLS) avant tout d\'eploiement.
+  \item \textbf{Architecture hybride.} Une base SQL pourrait conserver l'historique durable, tandis que Redis servirait de couche rapide pour les recherches et les r\'eservations.
+\end{itemize}
+
+% =============================== 9. CONCLUSION ========================
+\section{Conclusion}
+Ce projet montre qu'une base \textbf{cl\'e-valeur} comme Redis convient tr\`es bien \`a une application dont les acc\`es sont connus : lecture par identifiant, recherche g\'eographique, index par ville, compteurs de places, expiration et classement sont tous couverts par des structures natives. Nous avons mod\'elis\'e les donn\'ees \`a partir des requ\^etes, construit nos propres index secondaires, et utilis\'e l'atomicit\'e de \texttt{HINCRBY} pour \'eviter la surr\'eservation.
+
+Nous avons aussi identifi\'e les contreparties de ce choix : donn\'ees en m\'emoire, index \`a maintenir \`a la main, nettoyage des entr\'ees expir\'ees et absence de transaction multi-commandes dans la version actuelle. Ces points guident les am\'eliorations possibles. Associ\'ee \`a l'API REST d\'ecrite dans le rapport Services Web, cette base forme une application compl\`ete et d\'emontrable.
+
+% =============================== ANNEXES ==============================
+\appendix
+\section{Script de donn\'ees d'exemple (extrait)}
+\begin{lstlisting}
+FLUSHDB
+SET seq:user 4
+SET seq:ride 8
+HSET user:1 name "Sarra" email "sarra@mail.tn" city sfax ratingSum 14 ratingCount 3
+HSET user:2 name "Ahmed" email "ahmed@mail.tn" city sfax ratingSum 9 ratingCount 2
+HSET user:3 name "Meriem" email "meriem@mail.tn" city sousse ratingSum 4 ratingCount 1
+HSET user:4 name "Yassine" email "yassine@mail.tn" city tunis ratingSum 0 ratingCount 0
+HSET ride:1 driverId 1 origin sfax destination tunis departureAt 1795363200 seats 3 seatsLeft 2 price 15 status OPEN
+HSET ride:2 driverId 2 origin sfax destination sousse departureAt 1795366800 seats 4 seatsLeft 4 price 8 status OPEN
+...
+EXPIREAT ride:1 1795536000
+...
+GEOADD rides:geo 10.7600 34.7406 ride:1 10.7650 34.7450 ride:2 10.6411 35.8256 ride:3 ...
+SADD rides:from:sfax ride:1 ride:2 ride:5
+SADD rides:to:tunis ride:1 ride:3 ride:5 ride:8
+SADD ride:1:passengers 4
+EXPIREAT ride:1:passengers 1795536000
+ZADD leaderboard:drivers 4.67 1 4.5 2 4.0 3
+HSET stats:summary ridesCreated 8 bookings 2 ratings 6
+\end{lstlisting}
+Les horodatages (ici \texttt{1795536000}) sont donn\'es \`a titre d'exemple : le script de lancement les recalcule \`a chaque chargement.
+
+\section{Villes prises en charge}
+Tunis, Ariana, Bizerte, Nabeul, Hammamet, Zaghouan, B\'eja, Jendouba, Le Kef, Sousse, Monastir, Mahdia, Kairouan, Kasserine, Sidi Bouzid, Sfax, Gafsa, Gab\`es, M\'edenine, Djerba, Tozeur, Tataouine. Les coordonn\'ees de chaque ville servent \`a placer le d\'epart du trajet dans l'index \texttt{GEO}.
+
+\end{document}
